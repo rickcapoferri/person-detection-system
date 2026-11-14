@@ -12,13 +12,19 @@ Other people remain visible but are not selected automatically.
 - `size` reports bounding-box height as a fraction of frame height.
 - No motor commands are emitted yet.
 
+Tracking follows the selected ByteTrack ID; it does not independently recognize
+the person's identity. If that same ID returns, tracking resumes. If the person
+returns with a different ID, click their bounding box to select them again.
+ID switches can also cause a track ID to follow the wrong person; this prototype
+does not detect or correct those identity errors.
+
 ## Setup on macOS
 
 Use the installed Python 3.14 in an isolated environment:
 
 ```bash
 cd person-detection-system
-python3 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
@@ -52,8 +58,13 @@ The selection and control-signal geometry can be tested without a camera or AI
 dependencies:
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3.14 -m unittest discover -s tests -v
 ```
+
+The five unit tests cover click selection (including overlapping boxes and clicks
+outside a box) and bounding-box geometry for horizontal error and relative height.
+They do not measure real-world detection or tracking accuracy, target-loss
+handling, reacquisition, or ID switches.
 
 ## Next engineering steps
 
