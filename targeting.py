@@ -3,6 +3,49 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+
+
+@dataclass(slots=True)
+class TargetState:
+    """Expire a lock using monotonic seconds since the last sighting."""
+
+    lost_timeout: float = 2.0
+    target_id: int | None = None
+    last_seen: float | None = None
+    missing_frames: int = 0
+    pending_click: tuple[int, int] | None = None
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.lost_timeout) or self.lost_timeout <= 0:
+            raise ValueError("lost timeout must be a finite positive number")
+
+    def lock(self, target_id: int, now: float) -> None:
+        self.target_id = target_id
+        self.last_seen = now
+        self.missing_frames = 0
+
+    def clear(self) -> None:
+        self.target_id = None
+        self.last_seen = None
+        self.missing_frames = 0
+        self.pending_click = None
+
+    def update(self, detections: list[Detection], now: float) -> Detection | None:
+        # Check expiry before matching: a late return must require a new click.
+        if self.last_seen is not None and now - self.last_seen >= self.lost_timeout:
+            self.clear()
+        if self.target_id is None:
+            return None
+        target = next(
+            (item for item in detections if item.track_id == self.target_id), None
+        )
+        if target is None:
+            self.missing_frames += 1
+        else:
+            self.last_seen = now
+            self.missing_frames = 0
+        return target
 
 
 @dataclass(frozen=True, slots=True)

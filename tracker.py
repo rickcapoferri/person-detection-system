@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import platform
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 os.environ.setdefault(
@@ -17,17 +17,10 @@ import cv2
 import torch
 from ultralytics import YOLO # type: ignore
 
-from targeting import Detection, select_detection, target_signals
+from targeting import Detection, TargetState, select_detection, target_signals
 
 
 WINDOW_NAME = "Rover person tracker"
-
-
-@dataclass(slots=True)
-class TargetState:
-    target_id: int | None = None
-    missing_frames: int = 0
-    pending_click: tuple[int, int] | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,7 +30,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tracker", default="bytetrack.yaml")
     parser.add_argument("--confidence", type=float, default=0.35)
     parser.add_argument("--device", default="auto", help="auto, mps, cpu, ...")
-    return parser.parse_args()
+    parser.add_argument(
+        "--lost-timeout", type=float, default=2.0, metavar="SECONDS",
+        help="expire the lock after this many seconds without a sighting (default: 2)",
+    )
+    args = parser.parse_args()
+    if not math.isfinite(args.lost_timeout) or args.lost_timeout <= 0:
+        parser.error("--lost-timeout must be a finite positive number")
+    return args
 
 
 def resolve_device(requested: str) -> str:
@@ -106,7 +106,7 @@ def main() -> None:
     if not capture.isOpened():
         raise RuntimeError(f"Unable to open camera {args.camera}")
 
-    state = TargetState()
+    state = TargetState(lost_timeout=args.lost_timeout)
     smoothed_fps = 0.0
     previous_time = time.perf_counter()
 
@@ -133,18 +133,15 @@ def main() -> None:
                 verbose=False,
             )[0]
             detections = extract_people(result)
+            now = time.monotonic()
 
             if state.pending_click is not None:
                 selected = select_detection(detections, *state.pending_click)
                 state.pending_click = None
                 if selected is not None:
-                    state.target_id = selected.track_id
-                    state.missing_frames = 0
+                    state.lock(selected.track_id, now)
 
-            target = next(
-                (item for item in detections if item.track_id == state.target_id),
-                None,
-            )
+            target = state.update(detections, now)
 
             for detection in detections:
                 if detection.track_id != state.target_id:
@@ -154,14 +151,12 @@ def main() -> None:
                 status = "SELECT: click on a person"
                 status_color = (0, 215, 255)
             elif target is None:
-                state.missing_frames += 1
                 status = (
                     f"LOST: target {state.target_id} missing "
                     f"({state.missing_frames} frames)"
                 )
                 status_color = (0, 0, 255)
             else:
-                state.missing_frames = 0
                 draw_box(frame, target, (0, 255, 0), 3, prefix="TARGET")
                 error_x, height_ratio = target_signals(
                     target, frame.shape[1], frame.shape[0]
@@ -208,8 +203,7 @@ def main() -> None:
             if key == ord("q"):
                 break
             if key == ord("r"):
-                state.target_id = None
-                state.missing_frames = 0
+                state.clear()
     finally:
         capture.release()
         cv2.destroyAllWindows()
